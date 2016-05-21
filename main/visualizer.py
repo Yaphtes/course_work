@@ -96,4 +96,4 @@ if __name__ == '__main__':
         exit()
     result = load_from_file(sys.argv[1])
 
-    display_animation(result, (0.5, 0.5, 0.5, 0.5), use_subprocess=True)
+    display_animation(result, (0.5, 0.5, 0.5, 0.5), filename="result.mp4", use_subprocess=True)
