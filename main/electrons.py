@@ -9,12 +9,13 @@
 # Как такое движение электронов выглядит в теории:
 # https://en.wikipedia.org/wiki/Lorentz_force#/media/File:Charged-particle-drifts.svg
 
-import numpy as np
-import os
 import configparser
+import os
+import sys
+
+import numpy as np
 from mpi4py import MPI
 
-import sys
 sys.path.append(os.curdir)
 import timer as _timer
 
@@ -82,7 +83,8 @@ def np_1d_array_from_string(string):
 
 
 def read_parameters_from_config_file(filename):
-    curdir = os.curdir + os.path.split(filename)[0]
+    curdir = os.path.split(filename)[0]  # os.curdir +
+
     config = configparser.ConfigParser()
     config.read(filename)
 
@@ -108,7 +110,8 @@ def read_parameters_from_config_file(filename):
         elif "file" in conf:
             fname = conf["file"]
             binr = "b" if "binary" in conf and conf.getboolean("binary") else ""
-            with open(curdir + os.path.sep + fname, "r" + binr) as file:
+            with open(  # curdir + os.path.sep +
+                    fname, "r" + binr) as file:
                 if binr:
                     import struct
                     fmt = "%dd" % dimensions
@@ -200,11 +203,15 @@ def compute_perfomance():
 
 if __name__ == "__main__":
 
-    result = parallel_run("config.cfg")
+    if len(sys.argv) < 2:
+        print("too few args, exiting...")
+        exit()
+
+    result = parallel_run(sys.argv[1])
     if result is None:
         exit()
 
-    if len(sys.argv) > 1:
-        output_file_name = sys.argv[1]
+    if len(sys.argv) > 2:
+        output_file_name = sys.argv[2]
         np.save(output_file_name, result)
         print("Result saved to file: " + output_file_name)
