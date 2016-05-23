@@ -42,6 +42,7 @@ def _save_animation_subprocess(filename, figure, frames_count, fps, bitrate, upd
 
 
 def _save_animation_subprocess_parallel(filename, figure, frames_count, fps, bitrate, update_fn, args):
+    # TODO: implement
     pass
 
 
@@ -53,7 +54,8 @@ def _save_animation_matplotlib(filename, figure, frames_count, fps, bitrate, upd
 
 SAVE_METHOD = {"default": _save_animation_matplotlib,
                "subprocess": _save_animation_subprocess,
-               "parallel": _save_animation_subprocess_parallel}
+               # "parallel": _save_animation_subprocess_parallel,
+               }
 
 
 def update_fn(i, result, electrons):
