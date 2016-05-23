@@ -11,31 +11,11 @@ def str_color(r, g, b):
 
 
 def load_from_file(filename):
-    result = None
     with open(filename, "rb") as file:
-        result = np.load(file)
-    return result
+        return np.load(file)
 
 
-class Electron:
-    def __init__(self, plt, color):
-        self.line = plt.plot([], [], "r-")[0]
-        self.line.set_color(color)
-        self.point = plt.plot([], [], "r.")[0]
-        self.point.set_color(color)
-
-
-def update(i, result, electrons):
-    j = 0
-    for electron in electrons:
-        electron.line.set_xdata(np.append(electron.line.get_xdata(), result[i][j][0]))
-        electron.line.set_ydata(np.append(electron.line.get_ydata(), result[i][j][1]))
-        electron.point.set_xdata(result[i][j][0])
-        electron.point.set_ydata(result[i][j][1])
-        j += 1
-
-
-def save_animation_in_subprocess(filename, figure, frames_count, fps, bitrate, update, args):
+def _save_animation_subprocess(filename, figure, frames_count, fps, bitrate, update_fn, args):
     canvas_width, canvas_height = figure.canvas.get_width_height()
     # Open an ffmpeg process
     cmdstring = ('ffmpeg',
@@ -54,46 +34,96 @@ def save_animation_in_subprocess(filename, figure, frames_count, fps, bitrate, u
     i = 0
     for frame in range(frames_count):
         # draw the frame
-        update(i, *args)
+        update_fn(i, *args)
         figure.canvas.draw()
         p.stdin.write(figure.canvas.tostring_argb())
         i += 1
     p.communicate()
 
 
-def display_animation(result, coords, filename=None, save=True,
-                      use_subprocess=False, show_plot=False, fps=30, bit_rate=2400):
+def _save_animation_subprocess_parallel(filename, figure, frames_count, fps, bitrate, update_fn, args):
+    pass
+
+
+def _save_animation_matplotlib(filename, figure, frames_count, fps, bitrate, update_fn, args):
+    line_ani = animation.FuncAnimation(figure, update_fn, fargs=args, frames=frames_count, repeat=False)
+    writer = animation.writers['ffmpeg'](fps=fps, bitrate=bitrate)
+    line_ani.save(filename, writer=writer)
+
+
+SAVE_METHOD = {"default": _save_animation_matplotlib,
+               "subprocess": _save_animation_subprocess,
+               "parallel": _save_animation_subprocess_parallel}
+
+
+def update_fn(i, result, electrons):
+    j = 0
+    for electron in electrons:
+        electron.line.set_xdata(np.append(electron.line.get_xdata(), result[i][j][0]))
+        electron.line.set_ydata(np.append(electron.line.get_ydata(), result[i][j][1]))
+        electron.point.set_xdata(result[i][j][0])
+        electron.point.set_ydata(result[i][j][1])
+        j += 1
+
+
+def save_animation(result, xrange, yrange, filename, electron_color_fn=None, method="subprocess", fps=30,
+                   bit_rate=2400):
     figure = pp.figure()
-
-    pp.xlim(-coords[0] + coords[2], coords[0] + coords[2])
-    pp.ylim(-coords[1] + coords[3], coords[1] + coords[3])
-
-    electron_count = len(result[0])
-    frames = len(result)
+    pp.xlim(xrange[0], xrange[1])
+    pp.ylim(yrange[0], yrange[1])
+    electron_count, frame_count = len(result[0]), len(result)
+    if electron_color_fn is None:
+        electron_color_fn = lambda i, c: "r"
     # noinspection PyTypeChecker
-    electrons = [Electron(pp, str_color(255 * (i / electron_count),
-                                        0,
-                                        255 * (1 - (i / electron_count)))) for i in range(electron_count)]
-    if use_subprocess and save:
-        save_animation_in_subprocess(filename, figure, frames, fps, bit_rate, update, args=(result, electrons,))
-        if show_plot:
-            raise Exception("Please consider using use_subprocess=False in order to show plot")
-    else:
-        line_ani = animation.FuncAnimation(figure, update, fargs=(result, electrons,), frames=frames, repeat=False)
-        if save:
-            writer = animation.writers['ffmpeg'](fps=fps, bitrate=bit_rate)
-            line_ani.save(filename, writer=writer)
-        if show_plot:
-            try:
-                pp.show()
-            except AttributeError:
-                pass
+    electrons = [Electron(pp, electron_color_fn(i, electron_count)) for i in range(electron_count)]
+    method_fn = SAVE_METHOD.get(method, None)
+    if not method_fn:
+        raise Exception("No such method: %s" % method)
+    # noinspection PyCallingNonCallable
+    method_fn(filename, figure, frame_count, fps, bit_rate, update_fn, args=(result, electrons,))
+
+
+def display_animation(result, xrange, yrange, electron_color_fn=None):
+    figure = pp.figure()
+    pp.xlim(xrange[0], xrange[1])
+    pp.ylim(yrange[0], yrange[1])
+    electron_count = len(result[0])
+    frame_count = len(result)
+    if electron_color_fn is None:
+        electron_color_fn = lambda i, c: "r"
+    # noinspection PyTypeChecker
+    electrons = [Electron(pp, electron_color_fn(i, electron_count)) for i in range(electron_count)]
+    line_ani = animation.FuncAnimation(figure, update_fn, fargs=(result, electrons,), frames=frame_count, repeat=False)
+    try:
+        pp.show()
+    except AttributeError:
+        pass
+
+
+class Electron:
+    def __init__(self, plt, color):
+        self.line = plt.plot([], [], "r-")[0]
+        self.line.set_color(color)
+        self.point = plt.plot([], [], "r.")[0]
+        self.point.set_color(color)
+
+
+def sample_color_function(i, size):
+    return str_color(int(255 * (i / size)), 0, int(255 * (1 - i / size)))
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("no file specified, exiting")
+    if len(sys.argv) < 3:
+        print("no output and input file specified, exiting")
         exit()
     result = load_from_file(sys.argv[1])
+    filename = sys.argv[2]
 
-    display_animation(result, (0.5, 0.5, 0.5, 0.5), filename="result.mp4", use_subprocess=True)
+    argc = len(sys.argv)
+    method = "subprocess" if argc < 4 else sys.argv[3]
+    xrange = (0, 1) if argc < 5 else sys.argv[4].split(",")
+    yrange = (0, 1) if argc < 6 else sys.argv[5].split(",")
+
+    save_animation(result, xrange, yrange, filename,
+                   electron_color_fn=sample_color_function,
+                   method=method)
