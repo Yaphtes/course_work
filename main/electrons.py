@@ -34,11 +34,11 @@ E = -1.602176565e-19
 EM = E / M
 
 
+# расчет траекторий электронов, со скоростью V и позицией X
 def calculate(X, V, E, B, t0, dt, iter_count):
     global EM
     t = t0
     N = len(X)
-    # Estimate size of result:
     result = np.empty((iter_count, N, X.shape[1]), dtype=np.float64)
     # В указанном промежутке времени
     for j in range(iter_count):
@@ -55,6 +55,7 @@ def calculate(X, V, E, B, t0, dt, iter_count):
     return result
 
 
+# тестовая функция для функции calculate
 def test_calculate():
     # Задаем начальные позиции двух электронов
     X = np.array([(1, 0, 0),
@@ -78,13 +79,13 @@ def test_calculate():
     print(*result, sep="\n")
 
 
+# преобразует строку к одномерному массиву
 def np_1d_array_from_string(string):
     return np.array([float(x) for x in string.split(" ")], dtype=np.float64)
 
 
+# считывает параметры с конфиг-файла и возвращает их в виде словаря(ассоциативный маасив)
 def read_parameters_from_config_file(filename):
-    curdir = os.path.split(filename)[0]  # os.curdir +
-
     config = configparser.ConfigParser()
     config.read(filename)
 
@@ -110,8 +111,7 @@ def read_parameters_from_config_file(filename):
         elif "file" in conf:
             fname = conf["file"]
             binr = "b" if "binary" in conf and conf.getboolean("binary") else ""
-            with open(  # curdir + os.path.sep +
-                    fname, "r" + binr) as file:
+            with open(fname, "r" + binr) as file:
                 if binr:
                     import struct
                     fmt = "%dd" % dimensions
@@ -135,12 +135,13 @@ def read_parameters_from_config_file(filename):
     return result
 
 
-# Дан вычислительный кластер из M узлов
-# 1) На главном узле задаются начальные данные для N электронов в виде
-# некоторого массива DATA
-# 2) Каждый узел обсчитывает K (K = N / M) электронов
-# 3) Главная узел собирает данные
+# реализация параллельного вычисления траектории электронов с ппомощью системы MPI
 def parallel_run(config_file_name):
+    # Дан вычислительный кластер из M узлов
+    # 1) На главном узле задаются начальные данные для N электронов в виде
+    # некоторого массива DATA
+    # 2) Каждый узел обсчитывает K (K = N / M) электронов
+    # 3) Главная узел собирает данные
     parameters = dict() if RANK != 0 else read_parameters_from_config_file(config_file_name)
 
     X_host = None
@@ -195,6 +196,7 @@ def parallel_run(config_file_name):
         return None
 
 
+# функция для измерения производительности
 def compute_perfomance():
     timer = _timer.Timer()
 
@@ -206,6 +208,7 @@ def compute_perfomance():
     # TODO: add more perfomance computing points
 
 
+# тело программы(аналог main из C)
 if __name__ == "__main__":
 
     if len(sys.argv) < 2:
