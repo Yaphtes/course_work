@@ -9,25 +9,29 @@
 # Как такое движение электронов выглядит в теории:
 # https://en.wikipedia.org/wiki/Lorentz_force#/media/File:Charged-particle-drifts.svg
 
-import configparser
-import struct
+import configparser  # Средства разбора конфиг. файлов
+import struct  # Средства упаковки и распаковки двоичных данных
 import sys
 
-import numpy as np
-from mpi4py import MPI
+import numpy as np  # NumPy
+from mpi4py import MPI  # Фреймворк MPI
 
-import timer as _timer
+import timer as _timer  # Timer
 
 COMM = MPI.COMM_WORLD
+# Идентификатор узла, на котором выполняется данный экземпляр программы
 RANK = COMM.Get_rank()
+# Количество узлов в системе MPI
 SIZE = COMM.Get_size()
 
+# Отображение типов данных с плавающей точкой numpy на типы данных с плавающей точкой MPI
 NUMPY_TO_MPI_FP_DATATYPE = {
     np.float32: MPI.FLOAT,
     np.float64: MPI.DOUBLE,
     np.float128: MPI.LONG_DOUBLE
 }
 
+# Строковые константы - имена секций в конфиг. файле
 CONFIG_GENERAL_PARAMETERS = "General parameters"
 CONFIG_VELOCITIES = "Velocities"
 CONFIG_POSITIONS = "Positions"
@@ -87,7 +91,7 @@ def calculate(X: np.ndarray, V: np.ndarray, E: np.array, B: np.array,
 
 def np_1d_array_from_string(string, separator=" "):
     """
-    Преобразует строку в одномерный numpy массив.
+    Преобразует строку в одномерный numpy массив.\n
     :param string: Строка
     :param separator: Разделитель для компонент массива
     :return: numpy массив, содержащий компоненты вектора
@@ -98,7 +102,7 @@ def np_1d_array_from_string(string, separator=" "):
 def read_parameters_from_config_file(filename, node=0, numpy_fp_numbers_format=np.float64):
     """
     Вспомогательная функция для разбора конфигурационного файла. Рассчитана на работу с MPI (выполнится только
-    на указанном узле)
+    на указанном узле).\n
     :param filename: Имя конфиг. файла
     :param node: Узел MPI, на котором хранится файл.
     :param numpy_fp_numbers_format: numpy формат чисел с плавающей точкой
@@ -160,7 +164,7 @@ def read_parameters_from_config_file(filename, node=0, numpy_fp_numbers_format=n
 
 def compute_part_lengths(elements_count, shape=(None, 3)):
     """
-    Вспомогательная функция для равномерного распределения количества данных на все узлы.
+    Вспомогательная функция для равномерного распределения количества данных на все узлы.\n
     :param elements_count: количество элементов
     :param shape: Форма распределяемой матрицы, первый аргумент игнорируется
     :return: Список длиной SIZE, содержащий количества электронов для каждого узла;
@@ -181,12 +185,28 @@ def compute_part_lengths(elements_count, shape=(None, 3)):
            [(rough + 1) * mul * i for i in range(rem)] + [rem * mul + (rough * i * mul) for i in range(rem, SIZE)]
 
 
-# Дан вычислительный кластер из M узлов
-# 1) На главном узле задаются начальные данные для N электронов в виде
-# некоторого массива DATA
-# 2) Каждый узел обсчитывает K (K = N / M) электронов
-# 3) Главная узел собирает данные
-def parallel_run(parameters: dict) -> np.ndarray:
+# Общая идея параллелизации:
+# 1. На корневом узле (далее хост) считаем все необходимые параметры, такие как начальные позиции и скорости электронов,
+# из конфигурационного файла;
+# 2. Равномерно распределим эти данные между узлами, выделив каждому узлу некоторое количество электронов для расчета.
+# Если количество электронов не кратно количеству узлов, то распределим остаток K между первыми K узлами;
+# 3. Получив данные, произведем на каждом узле расчет траекторий;
+# 4. На хосте соберем результат в единый массив, выполнив при этом, если потребуется, его реорганизацию.
+def parallel_run(parameters: dict) -> tuple:
+    """
+    Главная функция для параллелизации расчета.\n
+    :param parameters: Ассоциативный массив параметров, необходимых для расчета
+    :return: Кортеж, состоящий из результата, представленного в виде многомерного numpy массива
+    и кортежа таймеров (timer.Timer) следующего вида:
+    (
+        Таймер инициализации,
+        [Таймер расчета на 0 узле,
+         Таймер расчета на 1 узле,
+         ...
+         Таймер расчета на SIZE-м узле],
+        Таймер сбора и постобработки информации
+    )
+    """
     # Таймер процесса инициализации
     host_scatter_timer = None if RANK != 0 else _timer.Timer().start()
     # Распространим параметры, необходимые для инициализации, на все узлы
@@ -200,13 +220,8 @@ def parallel_run(parameters: dict) -> np.ndarray:
     node_electron_count_list, host_part_lengths, host_displacements = \
         (None, None, None) if RANK != 0 else compute_part_lengths(host_electron_count)
 
-    # Распространим информацию о длинах частей и количестве электронов на все узлы
-    part_len = COMM.scatter(host_part_lengths)
+    # Распространим информацию о распределении электронов на все узлы
     node_electron_count = COMM.scatter(node_electron_count_list)
-
-    # Если для некоторого узла
-    if part_len == 0:
-        pass
 
     # Инициализируем пустые массивы для позиций и скоростей на каждом узле
     X = np.empty((node_electron_count, DIMENSION), dtype=numpy_fp_numbers_format)
@@ -238,9 +253,12 @@ def parallel_run(parameters: dict) -> np.ndarray:
     if RANK == 0:
         host_scatter_timer.stop()
 
-    # В этой точке у нас есть все данные, соответствующие узлу, на котором мы выполняемся. Можно начать расчет.
+    # В этой точке у нас есть все данные, соответствующие узлу, на котором мы выполняемся
+    # Замерим время расчета: стартуем таймер
     local_calculation_timer = _timer.Timer().start()
+    # Сам расчет:
     part_of_result = calculate(X, V, E, B, t0, dt, iter_count)
+    # Остановим таймер расчета
     local_calculation_timer.stop()
 
     # В этой точке расчет траекторий окончен, вернем данные хосту
@@ -265,12 +283,25 @@ def parallel_run(parameters: dict) -> np.ndarray:
     local_calculation_timer_list = COMM.gather(local_calculation_timer)
     # На хосте производим финальную обработку данных
     if RANK == 0:
+        # Как было показано в процессе инициализации, количество электронов распределено по узлам неравномерно.
+        # Всего существует 2 типа узлов: те, на которых оказалось k = (Количество электронов)/(Количество узлов) + 1
+        # электронов, и те, на которых были расчитаны траектории для k - 1 электронов, причем сначала идут данные
+        # с узлов 1-го типа, а потом - с узлов 2-го.
+        # Количество электронов на узле 1-го и 2-го типов:
         part_len_former, part_len_latter = node_electron_count_list[0], node_electron_count_list[-1]
+        # Размер части массива, занятой данными узлов 1-го типа (в элементарных единицах):
         distr_part_size = DIMENSION * part_len_former * iter_count
+        # Если электроны равномерно распределены по узлам, либо (Количество электронов) < SIZE
         if part_len_former == part_len_latter or part_len_latter == 0:
-            # Электроны равномерно распределены по узлам, либо (Количество электронов) < SIZE
             size = SIZE if part_len_latter != 0 else host_electron_count
-            result = result.reshape((size, iter_count, part_len_former, DIMENSION,)) \
+            # Для получения массива формы (Количество итераций)X(Количество электронов)X(DIMENSION)
+            # проделаем следующие преобразования:
+            # 1. Преобразуем одномерный массив данных к четырехмерному массиву формы
+            # (Количество узлов)X(Количество итераций)X(Количеcтво электронов на узле)X(DIMENSION)
+            # 2. Поменяем местами 1 и 2 измерения
+            # 3. Объединим 2 и 3 измерения
+            result = result \
+                .reshape((size, iter_count, part_len_former, DIMENSION,)) \
                 .transpose((1, 0, 2, 3)) \
                 .reshape((iter_count, part_len_former * size, DIMENSION))
         else:
@@ -310,6 +341,7 @@ def parse_command_line_args(argv):
 
 # Тело программы (main)
 if __name__ == "__main__":
+    # Замерим полное время выполнения программы: стартуем таймер
     full_time_timer = _timer.Timer().start()
     if len(sys.argv) < 2:
         print("too few args, exiting...")
@@ -317,6 +349,7 @@ if __name__ == "__main__":
 
     opt, par = parse_command_line_args(sys.argv[1:])
 
+    # В каком формате вывести отчет о выполнении - сжатом (указан аргумент -testperf) или полном (арг. не указан)
     use_test_format = "-testperf" in opt
 
     # Считаем параметры из конфиг. файла
@@ -324,16 +357,17 @@ if __name__ == "__main__":
     # Произведем расчет
     result, timings = parallel_run(parameters)
     if result is None:
-        # Это значит, что мы выполняемся не на главном узле и можно завершить выполнение
+        # Если мы в этой точке, то это значит, что мы выполняемся не на главном узле и можно завершить выполнение
         exit()
 
     # Если в параметрах указано имя файла - сохраним данные в файл
     save_timer = None
     if len(par) >= 2:
+        # Замерим время сохранения в файл
         save_timer = _timer.Timer().start()
-        output_file_name = par[1]
-        np.save(output_file_name, result)
+        np.save(par[1], result)
         save_timer.stop()
+    # Остановим таймер полного времени
     full_time_timer.stop()
 
     # Выведем отчет
@@ -347,11 +381,12 @@ if __name__ == "__main__":
     print("-- Execution finished successfully --- ")
     print("Electron count:", parameters[CONFIG_ELECTRON_COUNT])
     print("Iteration count:", parameters[CONFIG_ITERATION_COUNT])
-    print("\t time range: [%f:%f], dt=%f" % (parameters[CONFIG_T0], parameters[CONFIG_T1], parameters[CONFIG_DT]))
+    print("\t time range: [%g:%g], dt=%g" % (parameters[CONFIG_T0], parameters[CONFIG_T1], parameters[CONFIG_DT]))
     print("Summary time:", full_time_timer.get_str())
-    print("Time spent on initialization (root node):", timings[0].get_str())
-    print("Time spent on computation:")
+    print("Time spent on:")
+    print("\tInitialization (root node):", timings[0].get_str())
+    print("\tComputation:")
     for i in range(SIZE):
-        print("\tNode %d: %s" % (i, timings[1][i].get_str()))
-    print("Time spent on gathering results (root node):", timings[2].get_str())
-    print("Time spent on saving results to file:", save_timer.get_str() if save_timer else None)
+        print("\t\tNode %d: %s" % (i, timings[1][i].get_str()))
+    print("\tGathering results (root node):", timings[2].get_str())
+    print("\tSaving results to file:", save_timer.get_str() if save_timer else None)
