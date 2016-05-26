@@ -1,9 +1,15 @@
 import subprocess
 import sys
 
-import matplotlib.animation as animation
-import matplotlib.pyplot as pp
 import numpy as np
+
+try:
+    import matplotlib.animation as animation
+    import matplotlib.pyplot as pp
+except ImportError:
+    animation = pp = None
+    print("visualizer: no matplotlib found, exiting...")
+    exit()
 
 
 def str_color(r, g, b):

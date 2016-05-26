@@ -16,7 +16,6 @@ import sys
 import numpy as np
 from mpi4py import MPI
 
-# sys.path.append(os.curdir)
 import timer as _timer
 
 COMM = MPI.COMM_WORLD
@@ -188,18 +187,22 @@ def compute_part_lengths(elements_count, shape=(None, 3)):
     Вспомогательная функция для равномерного распределения количества данных на все узлы.
     :param elements_count: количество элементов
     :param shape: Форма распределяемой матрицы, первый аргумент игнорируется
-    :return: Список из SIZE значений, соответствующих кол-ву элементов на i-м узле
+    :return: Список длиной SIZE, содержащий количества электронов для каждого узла;
+        список длиной SIZE, содержащий длины частей массива начальных данных, которые будут
+        разосланы на узлы, в элементарных единицах (т.е. в количестве чисел);
+        список длиной SIZE, содержащий смещения частей массива начальных данных в элементарных единицах
     """
     rough, rem = elements_count // SIZE, elements_count % SIZE
     mul = 1
     for i in range(len(shape) - 1):
         mul *= shape[i + 1]
     if rem == 0:
-        return [rough] * SIZE, [rough * mul] * SIZE, [rough * i * mul for i in range(SIZE)], (elements_count, 0)
+        return [rough] * SIZE, \
+               [rough * mul] * SIZE, \
+               [rough * i * mul for i in range(SIZE)]
     return [(rough + 1)] * rem + [rough] * (SIZE - rem), \
            [(rough + 1) * mul] * rem + [rough * mul] * (SIZE - rem), \
-           [(rough + 1) * mul * i for i in range(rem)] + [rem * mul + (rough * i * mul) for i in range(rem, SIZE)], \
-           (elements_count - rem, rem)
+           [(rough + 1) * mul * i for i in range(rem)] + [rem * mul + (rough * i * mul) for i in range(rem, SIZE)]
 
 
 # Дан вычислительный кластер из M узлов
@@ -208,18 +211,26 @@ def compute_part_lengths(elements_count, shape=(None, 3)):
 # 2) Каждый узел обсчитывает K (K = N / M) электронов
 # 3) Главная узел собирает данные
 def parallel_run(parameters: dict) -> np.ndarray:
-    # Рспространим параметры, необходимые для инициализации, на все узлы
+    # Таймер процесса инициализации
+    host_scatter_timer = None if RANK != 0 else _timer.Timer().start()
+    # Распространим параметры, необходимые для инициализации, на все узлы
+    # Используемый формат чисел с плавающей точкой для numpy
     numpy_fp_numbers_format = COMM.bcast(None if RANK != 0 else parameters[CONFIG_FP_NUMBERS_FORMAT])
+    # Используемый формат чисел с плавающей точкой для mpi
     mpi_fp_numbers_format = NUMPY_TO_MPI_FP_DATATYPE[numpy_fp_numbers_format]
+    # Полное количество электронов
     host_electron_count = None if RANK != 0 else parameters[CONFIG_ELECTRON_COUNT]
-    node_electron_count_list, host_part_lengths, host_displacements, host_distr_electron_sizes = \
-        (None, None, None, None) if RANK != 0 else compute_part_lengths(host_electron_count)
+    # Данные о распределении электронов
+    node_electron_count_list, host_part_lengths, host_displacements = \
+        (None, None, None) if RANK != 0 else compute_part_lengths(host_electron_count)
+
+    # Распространим информацию о длинах частей и количестве электронов на все узлы
     part_len = COMM.scatter(host_part_lengths)
     node_electron_count = COMM.scatter(node_electron_count_list)
 
+    # Если для некоторого узла
     if part_len == 0:
-        # TODO: test this case
-        return
+        pass
 
     # Инициализируем пустые массивы для позиций и скоростей на каждом узле
     X = np.empty((node_electron_count, DIMENSION), dtype=numpy_fp_numbers_format)
@@ -246,63 +257,101 @@ def parallel_run(parameters: dict) -> np.ndarray:
     # По умолчанию, iter_count - это количество итераций, необходимое для того чтобы рассчитать
     # траектории в интервале времени [t0, t1). Добавим в этот интервал точку t1:
     iter_count += 1
+
+    # Инициализация окончена, остановим таймер
+    if RANK == 0:
+        host_scatter_timer.stop()
+
     # В этой точке у нас есть все данные, соответствующие узлу, на котором мы выполняемся. Можно начать расчет.
+    local_calculation_timer = _timer.Timer().start()
     part_of_result = calculate(X, V, E, B, t0, dt, iter_count)
+    local_calculation_timer.stop()
 
     # В этой точке расчет траекторий окончен, вернем данные хосту
+    host_gather_timer = None
     result = None
     host_output_part_lengths = None
     host_output_part_displacements = None
     if RANK == 0:
-        full_size = iter_count * host_electron_count * DIMENSION
-        result = np.empty((full_size,), dtype=numpy_fp_numbers_format)
+        host_gather_timer = _timer.Timer().start()
+        # Одномерный массив, являющийся буфером для данных со всех узлов
+        result = np.empty((iter_count * host_electron_count * DIMENSION,), dtype=numpy_fp_numbers_format)
+        # Длины результатов с каждого узла
         host_output_part_lengths = [iter_count * x for x in host_part_lengths]
+        # Смещения результатов с каждого узла
         host_output_part_displacements = [iter_count * x for x in host_displacements]
-
+    # Собираем результат
     COMM.Gatherv(part_of_result, None if RANK != 0 else [result,
                                                          host_output_part_lengths,
                                                          host_output_part_displacements,
                                                          mpi_fp_numbers_format])
-
+    # Собираем таймеры с узлов
+    local_calculation_timer_list = COMM.gather(local_calculation_timer)
+    # На хосте производим финальную обработку данных
     if RANK == 0:
-        # TODO: optimize
-        distr_part_sizes = [DIMENSION * size * iter_count for size in host_distr_electron_sizes]
-        result0 = np.split(result[:distr_part_sizes[0]], iter_count)
-        result1 = np.split(result[distr_part_sizes[0]:], iter_count)
-        result = np.hstack((result0, result1))
-        # (iter_count, electron_count * 3)
-        result = result.reshape((iter_count, host_electron_count, DIMENSION,))
+        part_len_former, part_len_latter = node_electron_count_list[0], node_electron_count_list[-1]
+        distr_part_size = DIMENSION * part_len_former * iter_count
+        if part_len_former == part_len_latter or part_len_latter == 0:
+            # Электроны равномерно распределены по узлам, либо (Количество электронов) < SIZE
+            size = SIZE if part_len_latter != 0 else host_electron_count
+            result = result.reshape((size, iter_count, part_len_former, DIMENSION,)) \
+                .transpose((1, 0, 2, 3)) \
+                .reshape((iter_count, part_len_former * size, DIMENSION))
+        else:
+            # Результат состоит из двух условных частей.
+            # Пример для 3х электронов, 2х узлов, 3х итераций:
+            # [1, 2, 1, 2, 1, 2, 3, 3, 3]
+            # Последовательно выполним следующие преобразования:
+            # 1) Явно разделим массив на 2
+            # [1, 2, 1, 2, 1, 2], [3, 3, 3]
+            # 2) Преобразуем массивы к двумерным
+            # [[1, 2],      [[3],
+            #  [1, 2],       [3],
+            #  [1, 2]]       [3]]
+            # 3) Объединим их горизонтально (np.hstack)
+            # [[1, 2, 3],
+            #  [1, 2, 3],
+            #  [1, 2, 3]]
+            result = np.hstack((
+                result[:distr_part_size].reshape((iter_count, part_len_former, DIMENSION)),
+                result[distr_part_size:].reshape((iter_count, part_len_latter, DIMENSION))
+            ))
         # В этой точке мы имеем массив данных об электронах, точно такой же,
         # как если бы мы считали все на одной машине.
-        return result
-    else:
-        print("Non-host process %d completed..." % RANK)
-        return None
+        return result, (host_scatter_timer, local_calculation_timer_list, host_gather_timer.stop())
+    return None, None
 
 
-def compute_perfomance():
-    timer = _timer.Timer()
-
-    timer.start()
-
-    timer.stop()
-    print("Completed in %d ms" % timer.get_ms())
-
-    # TODO: add more perfomance computing points
-
-
+# Тело программы (main)
 if __name__ == "__main__":
-
+    full_time_timer = _timer.Timer().start()
     if len(sys.argv) < 2:
         print("too few args, exiting...")
         exit()
 
+    # Считаем параметры из конфиг. файла
     parameters = read_parameters_from_config_file(sys.argv[1])
-    result = parallel_run(parameters)
+    # Произведем расчет
+    result, timings = parallel_run(parameters)
     if result is None:
+        # Это значит, что мы выполняемся не на главном узле и можно завершить выполнение
         exit()
 
+    # Если в параметрах указано имя файла - сохраним данные в файл
+    save_timer = None
     if len(sys.argv) > 2:
+        save_timer = _timer.Timer().start()
         output_file_name = sys.argv[2]
         np.save(output_file_name, result)
-        print("Result saved to file: " + output_file_name)
+        save_timer.stop()
+    full_time_timer.stop()
+
+    # Выведем отчет
+    print("-- Execution finished successfully --- ")
+    print("Summary time:", full_time_timer.get_str())
+    print("Time spent on initialization (root node):", timings[0].get_str())
+    print("Time spent on computation:")
+    for i in range(SIZE):
+        print("\tNode %d: %s" % (i, timings[1][i].get_str()))
+    print("Time spent on gathering results (root node):", timings[2].get_str())
+    print("Time spent on saving results to file:", save_timer.get_str() if save_timer else None)
