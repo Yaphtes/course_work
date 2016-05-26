@@ -85,30 +85,6 @@ def calculate(X: np.ndarray, V: np.ndarray, E: np.array, B: np.array,
     return result
 
 
-# TODO: remove as non-nessesary
-def test_calculate():
-    # Задаем начальные позиции двух электронов
-    X = np.array([(1, 0, 0),
-                  (0, 1, 0),
-                  ],
-                 dtype=np.float64)
-    # Задаем их начальные скорости
-    V = np.array([(0, 1e7, 0),  # 10**7 м/с вдоль оси y
-                  (1e7, 0, 0),  # 10**7 м/с вдоль оси x
-                  ],
-                 dtype=np.float64)
-    # Задаем векторы E и B
-    E = np.array([0, 0, 0])
-    B = np.array([0, 0, 1e-3])
-    # ! ВАЖНО ! Электроны движутся с огромными скоростями, поэтому для кореектного расчета
-    # величина dt должна быть малой. Здесь во временном промежутке длиной в 1 наносекунду
-    # расчет проводится с шагом в 0.01 наносекунды, т.е. 100 значений
-    t0, tf, dt = 0, 1e-9, 1e-11
-    # Считаем
-    # result = calculate(X, V, E, B, t0, tf, dt)
-    print(*result, sep="\n")
-
-
 def np_1d_array_from_string(string, separator=" "):
     """
     Преобразует строку в одномерный numpy массив.
