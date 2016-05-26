@@ -1,6 +1,6 @@
 .idea/
-*.txt
-
 __pycache__/
 
-config.cfg
+*.txt
+
+test_config.cfg

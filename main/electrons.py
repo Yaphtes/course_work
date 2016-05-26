@@ -322,6 +322,16 @@ def parallel_run(parameters: dict) -> np.ndarray:
     return None, None
 
 
+def parse_command_line_args(argv):
+    opt = []
+    par = []
+    for arg in argv:
+        if arg.startswith("-"):
+            opt.append(arg)
+        else:
+            par.append(arg)
+    return opt, par
+
 # Тело программы (main)
 if __name__ == "__main__":
     full_time_timer = _timer.Timer().start()
@@ -329,8 +339,12 @@ if __name__ == "__main__":
         print("too few args, exiting...")
         exit()
 
+    opt, par = parse_command_line_args(sys.argv[1:])
+
+    use_test_format = "-testperf" in opt
+
     # Считаем параметры из конфиг. файла
-    parameters = read_parameters_from_config_file(sys.argv[1])
+    parameters = read_parameters_from_config_file(par[0])
     # Произведем расчет
     result, timings = parallel_run(parameters)
     if result is None:
@@ -339,15 +353,25 @@ if __name__ == "__main__":
 
     # Если в параметрах указано имя файла - сохраним данные в файл
     save_timer = None
-    if len(sys.argv) > 2:
+    if len(par) >= 2:
         save_timer = _timer.Timer().start()
-        output_file_name = sys.argv[2]
+        output_file_name = par[1]
         np.save(output_file_name, result)
         save_timer.stop()
     full_time_timer.stop()
 
     # Выведем отчет
+    if use_test_format:
+        # В тестовом формате нам важно только кол-во используемых узлов, кол-во электронов, кол-во итераций и
+        # затраченное на расчет время
+        print(SIZE, parameters[CONFIG_ELECTRON_COUNT], parameters[CONFIG_ITERATION_COUNT], full_time_timer.t)
+        exit()
+
+    # Если мы не в тестовом режиме, имеет смысл вывести полный отчет по проведенному расчету
     print("-- Execution finished successfully --- ")
+    print("Electron count:", parameters[CONFIG_ELECTRON_COUNT])
+    print("Iteration count:", parameters[CONFIG_ITERATION_COUNT])
+    print("\t time range: [%f:%f], dt=%f" % (parameters[CONFIG_T0], parameters[CONFIG_T1], parameters[CONFIG_DT]))
     print("Summary time:", full_time_timer.get_str())
     print("Time spent on initialization (root node):", timings[0].get_str())
     print("Time spent on computation:")

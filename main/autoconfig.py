@@ -119,3 +119,5 @@ if __name__ == '__main__':
     write_file(config['pf'], create_data(config['n'], *config['pb']), binary=config["isbin_pos"])
     write_file(config['vf'], create_data(config['n'], *config['vb']), binary=config["isbin_vel"])
     create_cfg(config['cfg'], config)
+
+    print(config['cfg'], sep="", end="")
