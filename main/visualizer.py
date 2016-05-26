@@ -12,6 +12,11 @@ except ImportError:
     exit()
 
 
+def dynamic_print(string):
+    sys.stdout.write("\r\x1b[K" + string)
+    sys.stdout.flush()
+
+
 def str_color(r, g, b):
     return "#{:02x}{:02x}{:02x}".format(int(r), int(g), int(b))
 
@@ -37,13 +42,11 @@ def _save_animation_subprocess(filename, figure, frames_count, fps, bitrate, upd
     p = subprocess.Popen(cmdstring, stdin=subprocess.PIPE)
 
     # Draw frames and write to the pipe
-    i = 0
-    for frame in range(frames_count):
+    for i in range(frames_count):
         # draw the frame
         update_fn(i, *args)
         figure.canvas.draw()
         p.stdin.write(figure.canvas.tostring_argb())
-        i += 1
     p.communicate()
 
 
@@ -129,8 +132,8 @@ if __name__ == '__main__':
 
     argc = len(sys.argv)
     method = "subprocess" if argc < 4 else sys.argv[3]
-    xrange = (0, 1) if argc < 5 else sys.argv[4].split(",")
-    yrange = (0, 1) if argc < 6 else sys.argv[5].split(",")
+    xrange = (0, 1) if argc < 5 else [float(x) for x in sys.argv[4].split(",")]
+    yrange = (0, 1) if argc < 6 else [float(x) for x in sys.argv[5].split(",")]
 
     save_animation(result, xrange, yrange, filename,
                    electron_color_fn=sample_color_function,
