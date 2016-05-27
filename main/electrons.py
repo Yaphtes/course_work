@@ -289,8 +289,10 @@ def parallel_run(parameters: dict) -> tuple:
         # с узлов 1-го типа, а потом - с узлов 2-го.
         # Количество электронов на узле 1-го и 2-го типов:
         part_len_former, part_len_latter = node_electron_count_list[0], node_electron_count_list[-1]
+        size_former = node_electron_count_list.count(part_len_former)
+        size_latter = len(node_electron_count_list) - size_former
         # Размер части массива, занятой данными узлов 1-го типа (в элементарных единицах):
-        distr_part_size = DIMENSION * part_len_former * iter_count
+        distr_part_size = DIMENSION * (part_len_former * size_former) * iter_count
         # Если электроны равномерно распределены по узлам, либо (Количество электронов) < SIZE
         if part_len_former == part_len_latter or part_len_latter == 0:
             size = SIZE if part_len_latter != 0 else host_electron_count
@@ -320,8 +322,8 @@ def parallel_run(parameters: dict) -> tuple:
             #  [1, 2, 3],
             #  [1, 2, 3]]
             result = np.hstack((
-                result[:distr_part_size].reshape((iter_count, part_len_former, DIMENSION)),
-                result[distr_part_size:].reshape((iter_count, part_len_latter, DIMENSION))
+                result[:distr_part_size].reshape((iter_count, size_former * part_len_former, DIMENSION)),
+                result[distr_part_size:].reshape((iter_count, size_latter * part_len_latter, DIMENSION))
             ))
         # В этой точке мы имеем массив данных об электронах, точно такой же,
         # как если бы мы считали все на одной машине.
