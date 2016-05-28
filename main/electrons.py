@@ -331,6 +331,7 @@ def parallel_run(parameters: dict) -> tuple:
     return None, None
 
 
+# Обработка аргументов из командной строки
 def parse_command_line_args(argv):
     opt = []
     par = []
